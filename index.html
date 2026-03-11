@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#020810">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RoomScan">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<title>Room Scanner</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap');
+
+:root {
+  --cyan: #00f5ff;
+  --green: #39ff14;
+  --red: #ff2d55;
+  --amber: #ffb300;
+  --dark: #020810;
+  --panel: rgba(2, 12, 22, 0.96);
+  --border: rgba(0, 245, 255, 0.25);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  height: 100%;
+  height: -webkit-fill-available;
+  background: var(--dark);
+  font-family: 'Share Tech Mono', monospace;
+  color: var(--cyan);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Scanlines */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,245,255,0.012) 2px, rgba(0,245,255,0.012) 4px);
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── HEADER ─────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: env(safe-area-inset-top, 10px) 16px 10px;
+  padding-top: max(env(safe-area-inset-top), 10px);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 100;
+}
+
+.logo {
+  font-family: 'Orbitron', monospace;
+  font-weight: 900;
+  font-size: 17px;
+  letter-spacing: 5px;
+  color: var(--cyan);
+  text-shadow: 0 0 18px rgba(0,245,255,0.7);
+}
+
+.header-right { display: flex; align-items: center; gap: 10px; }
+
+.pill {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  padding: 3px 9px;
+  border-radius: 20px;
+  border: 1px solid;
+  font-family: 'Orbitron', monospace;
+  transition: all 0.3s;
+}
+.pill.live   { border-color: var(--green); color: var(--green); box-shadow: 0 0 8px rgba(57,255,20,0.3); }
+.pill.ready  { border-color: var(--border); color: rgba(0,245,255,0.5); }
+.pill.scan   { border-color: var(--amber); color: var(--amber); box-shadow: 0 0 8px rgba(255,179,0,0.3); }
+.pill.error  { border-color: var(--red); color: var(--red); }
+
+/* ── CAMERA AREA ─────────────────────────── */
+.camera-wrap {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  background: #000;
+  min-height: 0;
+}
+
+#vid {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+#cvs {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+}
+
+/* HUD frame */
+.hud { position: absolute; inset: 0; pointer-events: none; }
+
+.corner {
+  position: absolute;
+  width: 22px; height: 22px;
+  border-color: var(--cyan);
+  border-style: solid;
+  opacity: 0.6;
+}
+.corner.tl { top:14px; left:14px; border-width:2px 0 0 2px; }
+.corner.tr { top:14px; right:14px; border-width:2px 2px 0 0; }
+.corner.bl { bottom:14px; left:14px; border-width:0 0 2px 2px; }
+.corner.br { bottom:14px; right:14px; border-width:0 2px 2px 0; }
+
+.crosshair {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 36px; height: 36px;
+}
+.crosshair::before, .crosshair::after {
+  content: ''; position: absolute; background: var(--cyan); opacity: 0.5;
+}
+.crosshair::before { width: 1px; height: 36px; left: 50%; top: 0; }
+.crosshair::after  { width: 36px; height: 1px; top: 50%; left: 0; }
+
+/* Scan beam */
+.beam {
+  position: absolute;
+  left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent 0%, var(--cyan) 50%, transparent 100%);
+  box-shadow: 0 0 10px var(--cyan), 0 0 30px rgba(0,245,255,0.3);
+  top: -2px;
+  transition: background 0.3s, box-shadow 0.3s;
+}
+.beam.active { animation: beamSweep 2.5s linear infinite; }
+.beam.found  {
+  background: linear-gradient(90deg, transparent 0%, var(--green) 50%, transparent 100%);
+  box-shadow: 0 0 10px var(--green), 0 0 30px rgba(57,255,20,0.4);
+}
+@keyframes beamSweep { 0% { top: 0%; } 100% { top: 100%; } }
+
+/* Detection overlays */
+#boxes { position: absolute; inset: 0; pointer-events: none; }
+
+.dbox {
+  position: absolute;
+  border: 1px solid var(--green);
+  box-shadow: 0 0 6px rgba(57,255,20,0.35), inset 0 0 6px rgba(57,255,20,0.05);
+  animation: boxIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dbox-label {
+  position: absolute;
+  top: -20px; left: -1px;
+  background: rgba(0,18,8,0.92);
+  border: 1px solid var(--green);
+  border-bottom: none;
+  color: var(--green);
+  font-size: 9px;
+  padding: 1px 6px;
+  white-space: nowrap;
+  text-shadow: 0 0 5px var(--green);
+  letter-spacing: 1px;
+}
+@keyframes boxIn { from { opacity:0; transform:scale(0.92); } to { opacity:1; transform:scale(1); } }
+
+.tbox {
+  position: absolute;
+  border: 2px solid var(--red);
+  animation: tboxPulse 0.6s ease-in-out infinite alternate, boxIn 0.3s ease;
+  box-shadow: 0 0 16px rgba(255,45,85,0.6), inset 0 0 16px rgba(255,45,85,0.1);
+}
+.tbox-label {
+  position: absolute;
+  top: -24px; left: 50%;
+  transform: translateX(-50%);
+  background: var(--red);
+  color: #fff;
+  font-size: 10px;
+  font-weight: bold;
+  padding: 2px 10px;
+  white-space: nowrap;
+  letter-spacing: 1px;
+}
+@keyframes tboxPulse {
+  from { box-shadow: 0 0 10px rgba(255,45,85,0.5); }
+  to   { box-shadow: 0 0 28px rgba(255,45,85,1); }
+}
+
+/* Start overlay */
+.start-overlay {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 18px;
+  background: radial-gradient(ellipse at 50% 60%, #001828 0%, #000 75%);
+  z-index: 20;
+}
+.start-overlay.hidden { display: none; }
+
+.cam-icon {
+  width: 72px; height: 72px;
+  border: 2px solid rgba(0,245,255,0.4);
+  border-radius: 16px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 32px;
+  position: relative;
+}
+.cam-icon::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border: 1px solid rgba(0,245,255,0.15);
+  border-radius: 24px;
+  animation: ringPulse 2s ease-in-out infinite;
+}
+@keyframes ringPulse { 0%,100%{opacity:0.3;transform:scale(1)} 50%{opacity:0.7;transform:scale(1.05)} }
+
+.start-label { font-size: 11px; letter-spacing: 3px; color: rgba(0,245,255,0.45); }
+
+.start-btn {
+  background: rgba(0,245,255,0.06);
+  border: 1px solid rgba(0,245,255,0.6);
+  color: var(--cyan);
+  font-family: 'Orbitron', monospace;
+  font-size: 11px;
+  letter-spacing: 3px;
+  padding: 11px 28px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 0 15px rgba(0,245,255,0.1);
+}
+.start-btn:active { background: rgba(0,245,255,0.15); transform: scale(0.97); }
+
+/* ── BOTTOM PANEL ────────────────────────── */
+.panel {
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  padding: 10px 14px;
+  padding-bottom: max(env(safe-area-inset-bottom), 10px);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 100;
+}
+
+/* Stats row */
+.stats {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 8px;
+  font-size: 10px;
+  color: rgba(0,245,255,0.45);
+}
+.stat-val { color: var(--cyan); margin-left: 3px; }
+.stat-target { color: var(--red); }
+
+/* Chip strip */
+.chips {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 5px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin-bottom: 9px;
+  padding-bottom: 2px;
+  min-height: 26px;
+  align-items: center;
+}
+.chips::-webkit-scrollbar { display: none; }
+
+.chip {
+  background: rgba(0,245,255,0.07);
+  border: 1px solid rgba(0,245,255,0.22);
+  color: var(--cyan);
+  font-size: 10px;
+  padding: 3px 9px;
+  border-radius: 2px;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s;
+  font-family: 'Share Tech Mono', monospace;
+}
+.chip:active { background: rgba(0,245,255,0.2); }
+
+.no-chips {
+  font-size: 10px;
+  color: rgba(0,245,255,0.25);
+  letter-spacing: 1px;
+}
+
+/* Search row */
+.search-row {
+  display: flex;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+
+.search-input {
+  flex: 1;
+  background: rgba(0,245,255,0.04);
+  border: 1px solid var(--border);
+  color: var(--cyan);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 14px;
+  padding: 9px 12px;
+  outline: none;
+  border-radius: 3px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  min-width: 0;
+}
+.search-input:focus {
+  border-color: rgba(0,245,255,0.7);
+  box-shadow: 0 0 10px rgba(0,245,255,0.15);
+}
+.search-input::placeholder { color: rgba(0,245,255,0.28); }
+
+.btn {
+  background: transparent;
+  border: 1px solid;
+  font-family: 'Orbitron', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  padding: 9px 13px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.btn-search { border-color: var(--cyan); color: var(--cyan); }
+.btn-search:active { background: rgba(0,245,255,0.15); }
+.btn-scan   { border-color: var(--green); color: var(--green); }
+.btn-scan:active, .btn-scan.scanning {
+  background: rgba(57,255,20,0.12);
+  animation: scanGlow 0.7s ease-in-out infinite alternate;
+}
+@keyframes scanGlow {
+  from { box-shadow: 0 0 4px rgba(57,255,20,0.3); }
+  to   { box-shadow: 0 0 16px rgba(57,255,20,0.7); }
+}
+
+/* Results */
+.results {
+  max-height: 90px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.ritem {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(0,245,255,0.08);
+  font-size: 11px;
+  line-height: 1.45;
+  animation: rIn 0.3s ease;
+}
+@keyframes rIn { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:none; } }
+
+.rdot { flex-shrink: 0; margin-top: 2px; font-size: 9px; }
+.rdot.ok  { color: var(--green); }
+.rdot.err { color: var(--red); }
+.rdot.inf { color: rgba(0,245,255,0.4); }
+.rdot.wait{ color: var(--amber); }
+
+.rtxt { color: rgba(0,245,255,0.8); }
+.rtxt strong { color: var(--cyan); }
+.rtxt em { color: rgba(0,245,255,0.5); font-style: normal; }
+
+/* Spinner */
+.spin {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border: 1.5px solid rgba(0,245,255,0.25);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: sp 0.7s linear infinite;
+  vertical-align: middle;
+  margin-right: 5px;
+}
+@keyframes sp { to { transform: rotate(360deg); } }
+
+/* Install banner */
+.install-banner {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(0, 245, 255, 0.06);
+  border: 1px solid rgba(0,245,255,0.2);
+  border-radius: 4px;
+  padding: 7px 10px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  gap: 8px;
+}
+.install-banner.show { display: flex; }
+.install-banner span { color: rgba(0,245,255,0.7); }
+.install-btn {
+  background: var(--cyan);
+  color: var(--dark);
+  border: none;
+  font-family: 'Orbitron', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  padding: 5px 10px;
+  border-radius: 2px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="logo">ROOM<span style="color:rgba(0,245,255,0.35)">.</span>SCAN</div>
+  <div class="header-right">
+    <div class="pill ready" id="pill">BEREIT</div>
+  </div>
+</div>
+
+<!-- Camera -->
+<div class="camera-wrap">
+  <video id="vid" autoplay playsinline muted></video>
+  <canvas id="cvs"></canvas>
+
+  <div class="hud">
+    <div class="corner tl"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
+    <div class="corner br"></div>
+    <div class="crosshair"></div>
+    <div class="beam" id="beam"></div>
+  </div>
+
+  <div id="boxes"></div>
+
+  <div class="start-overlay" id="startOverlay">
+    <div class="cam-icon">📷</div>
+    <div class="start-label">KAMERA INAKTIV</div>
+    <button class="start-btn" onclick="startCam()">KAMERA STARTEN</button>
+  </div>
+</div>
+
+<!-- Bottom Panel -->
+<div class="panel">
+
+  <!-- PWA Install Banner -->
+  <div class="install-banner" id="installBanner">
+    <span>📲 Als App installieren?</span>
+    <button class="install-btn" id="installBtn">INSTALLIEREN</button>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats">
+    <span>OBJ <span class="stat-val" id="sObj">0</span></span>
+    <span>SCANS <span class="stat-val" id="sScan">0</span></span>
+    <span id="sTarget" style="display:none">ZIEL <span class="stat-val stat-target">AKTIV</span></span>
+  </div>
+
+  <!-- Chips -->
+  <div class="chips" id="chips">
+    <span class="no-chips">— kamera starten &amp; scannen —</span>
+  </div>
+
+  <!-- Search -->
+  <div class="search-row">
+    <input class="search-input" id="searchInput" type="search"
+      placeholder="Was suchst du? z.B. Schlüssel …"
+      autocomplete="off" autocorrect="off" spellcheck="false"
+      onkeydown="if(event.key==='Enter'){event.preventDefault();doSearch()}">
+    <button class="btn btn-search" onclick="doSearch()" id="btnSearch">SUCHEN</button>
+    <button class="btn btn-scan"   onclick="doScan()"   id="btnScan">SCAN</button>
+  </div>
+
+  <!-- Results -->
+  <div class="results" id="results"></div>
+</div>
+
+<script>
+'use strict';
+
+// ── Config ────────────────────────────────────────────────────
+// Wird automatisch auf die gleiche HTTPS-Domain gesetzt.
+// Auf Render.com: passt sich automatisch an.
+const API = window.location.origin;
+
+// ── State ─────────────────────────────────────────────────────
+let camStream = null, scanning = false, scanN = 0;
+let objects = [], target = null, autoTimer = null;
+
+const vid    = document.getElementById('vid');
+const cvs    = document.getElementById('cvs');
+const ctx2d  = cvs.getContext('2d');
+const beam   = document.getElementById('beam');
+const boxes  = document.getElementById('boxes');
+const pill   = document.getElementById('pill');
+
+// ── PWA Install Prompt ────────────────────────────────────────
+let deferredInstall = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredInstall = e;
+  document.getElementById('installBanner').classList.add('show');
+});
+document.getElementById('installBtn').onclick = async () => {
+  if (!deferredInstall) return;
+  deferredInstall.prompt();
+  const { outcome } = await deferredInstall.userChoice;
+  if (outcome === 'accepted') document.getElementById('installBanner').classList.remove('show');
+  deferredInstall = null;
+};
+
+// ── Service Worker ────────────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+// ── Camera ────────────────────────────────────────────────────
+async function startCam() {
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
+    });
+    vid.srcObject = camStream;
+    document.getElementById('startOverlay').classList.add('hidden');
+    setPill('LIVE', 'live');
+    log('✓ Kamera aktiv — automatischer Scan läuft', 'ok');
+    autoTimer = setInterval(() => { if (!scanning) doScan(true); }, 7000);
+    setTimeout(() => doScan(true), 1000);
+  } catch (e) {
+    log('✗ Kamera-Fehler: ' + e.message, 'err');
+    setPill('FEHLER', 'error');
+  }
+}
+
+function frame(q = 0.82) {
+  cvs.width  = vid.videoWidth  || 640;
+  cvs.height = vid.videoHeight || 480;
+  ctx2d.drawImage(vid, 0, 0);
+  return cvs.toDataURL('image/jpeg', q).split(',')[1];
+}
+
+// ── Scan ──────────────────────────────────────────────────────
+async function doScan(auto = false) {
+  if (scanning || !camStream) return;
+  scanning = true; scanN++;
+  document.getElementById('sScan').textContent = scanN;
+  document.getElementById('btnScan').classList.add('scanning');
+  document.getElementById('btnScan').textContent = '···';
+  beam.classList.add('active');
+  setPill('SCAN', 'scan');
+
+  try {
+    const res  = await fetch(`${API}/api/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imageBase64: frame() })
+    });
+    if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || `HTTP ${res.status}`);
+    const data = await res.json();
+    objects = data.objects || [];
+    document.getElementById('sObj').textContent = objects.length;
+    renderChips();
+    renderBoxes();
+    if (!auto && objects.length)
+      log(`Erkannt (${objects.length}): <em>${objects.slice(0,5).join(', ')}${objects.length>5?'…':''}</em>`, 'ok');
+    if (target) checkTarget();
+  } catch(e) {
+    if (!auto) log('✗ Scan: ' + e.message, 'err');
+  }
+
+  scanning = false;
+  document.getElementById('btnScan').classList.remove('scanning');
+  document.getElementById('btnScan').textContent = 'SCAN';
+  beam.classList.remove('active');
+  setPill(camStream ? 'LIVE' : 'BEREIT', camStream ? 'live' : 'ready');
+}
+
+// ── Search ────────────────────────────────────────────────────
+async function doSearch() {
+  const inp = document.getElementById('searchInput');
+  const q = inp.value.trim();
+  if (!q) return;
+  if (!camStream) { log('✗ Bitte zuerst Kamera starten', 'err'); return; }
+
+  target = q.toLowerCase();
+  document.getElementById('sTarget').style.display = '';
+  document.getElementById('btnSearch').disabled = true;
+
+  log(`<span class="spin"></span>Suche: <strong>${q}</strong>`, 'wait');
+  inp.value = '';
+
+  try {
+    const res = await fetch(`${API}/api/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imageBase64: frame(0.88), query: q })
+    });
+    if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || `HTTP ${res.status}`);
+    const r = await res.json();
+
+    if (r.found) {
+      log(`✓ <strong>"${q}"</strong> gefunden! ${r.location} · ${r.confidence}% · <em>${r.description}</em>`, 'ok');
+      showTarget(r.location);
+      flashBeam();
+      setTimeout(() => clearTarget(), 7000);
+    } else {
+      let msg = `✗ <strong>"${q}"</strong> nicht sichtbar. <em>${r.description}</em>`;
+      if (r.similar?.length) msg += ` · Ähnlich: ${r.similar.join(', ')}`;
+      log(msg, 'err');
+      clearTarget();
+    }
+  } catch(e) {
+    log('✗ ' + e.message, 'err');
+  }
+
+  document.getElementById('btnSearch').disabled = false;
+}
+
+function checkTarget() {
+  const hit = objects.find(o =>
+    o.toLowerCase().includes(target) || target.includes(o.toLowerCase())
+  );
+  if (hit) {
+    log(`✓ Ziel <strong>"${target}"</strong> nun sichtbar!`, 'ok');
+    flashBeam();
+    clearTarget();
+  }
+}
+
+function clearTarget() {
+  target = null;
+  document.getElementById('sTarget').style.display = 'none';
+  boxes.querySelectorAll('.tbox').forEach(b => b.remove());
+}
+
+// ── UI Helpers ────────────────────────────────────────────────
+function renderChips() {
+  const c = document.getElementById('chips');
+  c.innerHTML = '';
+  if (!objects.length) {
+    c.innerHTML = '<span class="no-chips">— keine Objekte erkannt —</span>';
+    return;
+  }
+  objects.slice(0, 14).forEach(o => {
+    const ch = document.createElement('span');
+    ch.className = 'chip';
+    ch.textContent = o;
+    ch.onclick = () => {
+      document.getElementById('searchInput').value = o;
+      doSearch();
+    };
+    c.appendChild(ch);
+  });
+}
+
+function renderBoxes() {
+  boxes.innerHTML = '';
+  objects.slice(0, 8).forEach(o => {
+    const s = hash(o);
+    const b = document.createElement('div');
+    b.className = 'dbox';
+    b.style.cssText = `left:${7+s%58}%;top:${7+(s*7)%58}%;width:${11+s%17}%;height:${8+(s*3)%13}%`;
+    const l = document.createElement('div');
+    l.className = 'dbox-label';
+    l.textContent = o.toUpperCase();
+    b.appendChild(l); boxes.appendChild(b);
+  });
+}
+
+function showTarget(location) {
+  boxes.querySelectorAll('.tbox').forEach(b => b.remove());
+  const p = loc2xy(location);
+  const b = document.createElement('div');
+  b.className = 'tbox';
+  b.style.cssText = `left:${p.x}%;top:${p.y}%;width:27%;height:21%`;
+  const l = document.createElement('div');
+  l.className = 'tbox-label';
+  l.textContent = '▶ GEFUNDEN';
+  b.appendChild(l); boxes.appendChild(b);
+}
+
+function loc2xy(loc = '') {
+  const l = loc.toLowerCase();
+  let x = 36, y = 36;
+  if (l.includes('links')) x = 7;  else if (l.includes('rechts')) x = 60;
+  if (l.includes('oben'))  y = 7;  else if (l.includes('unten'))  y = 60;
+  return { x, y };
+}
+
+function flashBeam() {
+  beam.classList.remove('active');
+  beam.classList.add('found', 'active');
+  setTimeout(() => { beam.classList.remove('found', 'active'); }, 2000);
+}
+
+function setPill(text, cls) {
+  pill.textContent = text;
+  pill.className = `pill ${cls}`;
+}
+
+function log(html, type) {
+  const r = document.getElementById('results');
+  const row = document.createElement('div');
+  row.className = 'ritem';
+  const dotMap = { ok:'●', err:'○', inf:'·', wait:'◌' };
+  row.innerHTML = `<span class="rdot ${type}">${dotMap[type]||'·'}</span><span class="rtxt">${html}</span>`;
+  r.insertBefore(row, r.firstChild);
+  while (r.children.length > 12) r.removeChild(r.lastChild);
+}
+
+function hash(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+// ── Init ──────────────────────────────────────────────────────
+log('Room Scanner bereit — Kamera starten', 'inf');
+</script>
+</body>
+</html>
